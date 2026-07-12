@@ -79,9 +79,10 @@ main{grid-column:2;overflow-y:auto;padding:20px;padding-bottom:calc(20px + env(s
 
 /* ---------- COMPONENTS ---------- */
 .grid{display:grid;gap:14px}
+.grid>*{min-width:0}
 .g2{grid-template-columns:repeat(2,1fr)}.g3{grid-template-columns:repeat(3,1fr)}.g4{grid-template-columns:repeat(4,1fr)}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px}
-.card h3{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px;min-width:0}
+.card h3{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;row-gap:8px}
 .kpi .v{font-family:var(--font-d);font-size:30px;font-weight:700;line-height:1.05}
 .kpi .l{font-size:12px;color:var(--mut);margin-top:3px}
 .kpi .d{font-family:var(--font-m);font-size:11px;margin-top:7px}
@@ -193,9 +194,17 @@ canvas.chart{width:100%;height:220px;display:block}
   .g4{grid-template-columns:repeat(2,1fr)}.g3{grid-template-columns:1fr 1fr}.g2{grid-template-columns:1fr}
   .sb-score{font-size:clamp(48px,17vw,84px)}
   #modal .sheet{border-radius:18px 18px 0 0}
+  main{overflow-x:hidden}
+  table{display:block;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap}
+  table td,table th{white-space:nowrap}
+  .bracket{gap:16px}.round{min-width:172px}
+  .grid{min-width:0}
+  #whoPill{display:none}
+  .toolbar .inp[type=date]{min-width:130px}
 }
 @media(min-width:861px){#menuBtn{display:none}}
 @media(min-width:861px){#modal{align-items:center;padding:20px}#modal .sheet{border-radius:18px}}
+@media(max-width:480px){.btn{white-space:normal;text-align:center}.tag{white-space:normal}}
 @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -372,11 +381,20 @@ const VIEWS=[
  {id:'conn',t:'Connectors',i:'plug',roles:['admin']},
  {id:'set',t:'Settings',i:'gear',roles:['admin']}];
 const ROLES={
- admin:'Full control — all modules including Settings & Connectors',
- management:'All operations + Business Intelligence & CYRA (no system settings)',
- staff:'Front-desk operations — bookings, scoring, tournaments, players, payments, kiosk',
- member:'Member kiosk — dashboard, booking, live scoring',
- public:'Public / guest view — dashboard and live scores only'};
+ admin:'System Administrator — unrestricted: configuration, security, users, integrations, data',
+ management:'Management — business oversight: all operations, BI/analytics, exports, pricing & approvals; no system/security configuration',
+ staff:'Staff / Front Desk — daily transactions: bookings, check-in, payments collection, scoring, tournaments, kiosk; no exports, no configuration',
+ member:'Member — self-service: view schedule, create & cancel own bookings, self-score matches',
+ public:'Public / Guest — read-only: dashboard, availability, live scores; no personal data, no transactions'};
+/* RBAC permission matrix — least-privilege (NIST RBAC model: role → permissions → operations) */
+const PERMS={
+ admin:['*'],
+ management:['booking.create','booking.manage','booking.checkin','payment.collect','payment.view','player.manage','match.score','match.cast','tournament.manage','event.manage','notify.send','kiosk.manage','bi.view','ai.action','data.export'],
+ staff:['booking.create','booking.manage','booking.checkin','payment.collect','payment.view','player.manage','match.score','match.cast','tournament.manage','event.manage','notify.send','kiosk.manage','ai.action'],
+ member:['booking.create','booking.cancel.own','match.score'],
+ public:[]};
+function can(p){if(!USER)return false;const s=PERMS[USER.role]||[];return s.includes('*')||s.includes(p)}
+function deny(){toast('Not permitted for role “'+(USER?USER.role:'—')+'” (least-privilege policy)','warn');return false}
 let CUR='dash';
 function buildNav(){
   const vs=VIEWS.filter(v=>v.roles.includes(USER.role));
@@ -445,13 +463,13 @@ function vDash(){
   drawLine($('#chDash'),days,[{data:counts,color:'#00C2D1'},{data:days.map((x,i)=>i<10?null:fc.line[i-10]).map(v=>v??counts[9]),color:'#C9F24B',dash:true}].map(s=>({...s,data:s.data.map(v=>v==null?0:v)})));
 }
 function todayStrip(tb){
-  return `<div class="slot-grid" style="grid-template-columns:70px repeat(${CFG.courts.length},1fr)">
+  return `<div class="grid-scroll"><div class="slot-grid" style="grid-template-columns:70px repeat(${CFG.courts.length},1fr)">
    <div></div>${CFG.courts.map(c=>`<div class="slot-head">${esc(c)}</div>`).join('')}
    ${[...Array(Math.min(8,CFG.closeHour-CFG.openHour))].map((_,i)=>{const h=Math.max(CFG.openHour,new Date().getHours())+i;if(h>=CFG.closeHour)return'';
      return `<div class="slot-head" style="align-self:center">${hh(h)}</div>`+CFG.courts.map(c=>{
        const b=tb.find(x=>x.court===c&&x.hour===h);
        return b?`<div class="slot booked" title="${esc(player(b.playerId)?.name||'')}">${esc((player(b.playerId)?.name||'—').split(' ')[0])}</div>`:`<div class="slot" onclick="go('book')">open</div>`;}).join('')}).join('')}
-  </div>`;}
+  </div></div>`;}
 function nextUpTable(tb){
   const rows=tb.filter(b=>b.hour>=new Date().getHours()).sort((a,b)=>a.hour-b.hour).slice(0,6);
   if(!rows.length)return '<div class="empty"><b>No more bookings today</b>Open play until closing.</div>';
@@ -459,7 +477,7 @@ function nextUpTable(tb){
    <tr><td class="mono">${hh(b.hour)}</td><td>${esc(b.court)}</td><td>${esc(player(b.playerId)?.name||'—')}</td>
    <td><span class="tag cy">${b.type}</span></td><td><span class="tag ${b.status==='confirmed'?'ok':b.status==='no-show'?'bad':'warn'}">${b.status}</span></td>
    <td><button class="btn btn-g btn-sm" onclick="checkIn('${b.id}')">Check-in</button></td></tr>`).join('')}</table>`;}
-function checkIn(id){const b=DB.bookings.find(x=>x.id===id);if(!b)return;b.status='done';queue('bookings',b);save();toast('Checked in — enjoy the game!','ok');go(CUR)}
+function checkIn(id){if(!can('booking.checkin'))return deny();const b=DB.bookings.find(x=>x.id===id);if(!b)return;b.status='done';queue('bookings',b);save();toast('Checked in — enjoy the game!','ok');go(CUR)}
 
 /* ---------------- BOOKINGS ---------------- */
 let bookDate=today(),bookView='day';
@@ -547,6 +565,7 @@ function bookingForm(court,hour){
    <div style="display:flex;gap:10px"><button class="btn btn-p" onclick="saveBooking()">Save & notify</button><button class="btn btn-g" onclick="closeModal()">Cancel</button></div>`);
 }
 function saveBooking(){
+  if(!can('booking.create'))return deny();
   const date=$('#bDate').value,court=$('#bCourt').value,hour=+$('#bHour').value,dur=Math.max(1,+$('#bDur').value||1);
   for(let k=0;k<dur;k++)if(DB.bookings.some(b=>b.date===date&&b.court===court&&b.hour===hour+k&&b.status!=='cancelled')){toast(`Conflict: ${court} at ${hh(hour+k)} is already booked`,'bad');return}
   if(hour+dur>CFG.closeHour){toast('Booking runs past closing time','bad');return}
@@ -565,17 +584,18 @@ function bookingCard(id){
    <tr><td>Type</td><td><span class="tag cy">${b.type}</span></td></tr><tr><td>Status</td><td><span class="tag ${b.status==='confirmed'?'ok':'warn'}">${b.status}</span></td>
    </tr><tr><td>Paid</td><td>${b.paid?'<span class="tag ok">yes</span>':'<span class="tag warn">unpaid</span>'}</td></tr></table>
    <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
-    ${b.paid?'':`<button class="btn btn-ball btn-sm" onclick="payBooking('${b.id}')">Collect payment</button>`}
-    <button class="btn btn-g btn-sm" onclick="checkIn('${b.id}');closeModal()">Check-in</button>
-    <button class="btn btn-g btn-sm" onclick="markNoShow('${b.id}')">No-show</button>
-    <button class="btn btn-danger btn-sm" onclick="cancelBooking('${b.id}')">Cancel booking</button>
+    ${!b.paid&&can('payment.collect')?`<button class="btn btn-ball btn-sm" onclick="payBooking('${b.id}')">Collect payment</button>`:''}
+    ${can('booking.checkin')?`<button class="btn btn-g btn-sm" onclick="checkIn('${b.id}');closeModal()">Check-in</button>
+    <button class="btn btn-g btn-sm" onclick="markNoShow('${b.id}')">No-show</button>`:''}
+    ${can('booking.manage')||can('booking.cancel.own')?`<button class="btn btn-danger btn-sm" onclick="cancelBooking('${b.id}')">Cancel booking</button>`:''}
    </div>`);
 }
-function markNoShow(id){const b=DB.bookings.find(x=>x.id===id);b.status='no-show';const p=player(b.playerId);if(p)p.noShows=(p.noShows||0)+1;queue('bookings',b);save();closeModal();toast('Marked as no-show','warn');vBook()}
-function cancelBooking(id){const b=DB.bookings.find(x=>x.id===id);b.status='cancelled';queue('bookings',b);save();closeModal();
+function markNoShow(id){if(!can('booking.checkin'))return deny();const b=DB.bookings.find(x=>x.id===id);b.status='no-show';const p=player(b.playerId);if(p)p.noShows=(p.noShows||0)+1;queue('bookings',b);save();closeModal();toast('Marked as no-show','warn');vBook()}
+function cancelBooking(id){if(!(can('booking.manage')||can('booking.cancel.own')))return deny();const b=DB.bookings.find(x=>x.id===id);b.status='cancelled';queue('bookings',b);save();closeModal();
   const p=player(b.playerId);notify(p,'Booking cancelled',`Hi ${p?.name}, your booking on ${b.date} ${hh(b.hour)} (${b.court}) has been cancelled. Reply to rebook. — ${CFG.clubName}`);
   toast('Booking cancelled');vBook()}
 function payBooking(id){
+  if(!can('payment.collect'))return deny();
   const b=DB.bookings.find(x=>x.id===id),p=player(b.playerId);
   let amt=b.type==='coaching'?CFG.rateCoach:b.type==='open'?CFG.rateOpenPlay:CFG.rateReserved;amt*=b.durationH||1;
   if(p?.tier==='Member')amt=Math.round(amt*(1-CFG.rateMemberDiscount));
@@ -585,7 +605,7 @@ function payBooking(id){
    <div class="field"><label>Reference #</label><input id="payRef" class="inp mono" placeholder="optional"></div>
    <button class="btn btn-p" onclick="doPay('${id}')">Record payment</button>`);
 }
-function doPay(id){const b=DB.bookings.find(x=>x.id===id);b.paid=true;
+function doPay(id){if(!can('payment.collect'))return deny();const b=DB.bookings.find(x=>x.id===id);b.paid=true;
   const pay={id:uid('PAY'),date:today(),playerId:b.playerId,amount:+$('#payAmt').value,method:$('#payM').value,ref:$('#payRef').value,for:'Court booking',bookingId:b.id};
   DB.payments.push(pay);queue('payments',pay);queue('bookings',b);save();closeModal();
   const p=player(b.playerId);notify(p,'Payment received',`${CFG.clubName}: received ${peso(pay.amount)} via ${pay.method} for your booking on ${b.date}. Salamat!`);
@@ -623,13 +643,13 @@ function eventForm(){
    <div class="field"><label>Notes</label><textarea id="eN" class="inp" rows="2"></textarea></div>
    <button class="btn btn-p" onclick="saveEvent()">Save to planner</button>`);
 }
-function saveEvent(){
+function saveEvent(){if(!can('event.manage'))return deny();
   const e={id:uid('E'),title:$('#eT').value||'Untitled',date:$('#eD').value,time:$('#eTm').value,kind:$('#eK').value,
    capacity:$('#eC').value,courts:[...$('#eCt').selectedOptions].map(o=>o.value),notes:$('#eN').value,status:'planned'};
   DB.events.push(e);queue('events',e);save();closeModal();toast('Event planned','ok');vPlan();
 }
-function delEvent(id){DB.events=DB.events.filter(e=>e.id!==id);save();vPlan()}
-function blastEvent(id){const e=DB.events.find(x=>x.id===id);
+function delEvent(id){if(!can('event.manage'))return deny();DB.events=DB.events.filter(e=>e.id!==id);save();vPlan()}
+function blastEvent(id){if(!can('notify.send'))return deny();const e=DB.events.find(x=>x.id===id);
   const msg=`${CFG.clubName} · ${e.title} — ${e.date} ${e.time}. ${e.notes||''} Reserve your slot now!`;
   let n=0;DB.players.forEach(p=>{notify(p,'Club announcement',msg,true);n++});
   toast(`Announcement queued to ${n} players across enabled channels`,'ok');}
@@ -697,6 +717,17 @@ let liveMatch=null;
 function playerSel(id,defIdx){return `<select id="${id}" class="inp">${DB.players.map((p,i)=>`<option value="${p.id}" ${i===defIdx?'selected':''}>${esc(p.name)}</option>`).join('')}</select>`}
 function vScore(){
   liveMatch=DB.matches.find(m=>m.status==='live')||null;
+  if(!can('match.score')){ // read-only spectator board (Public role)
+    if(liveMatch){const c=scoreCastContent();
+      $('#main').innerHTML=`<div class="court-sb">
+       <div style="text-align:center;font-family:var(--font-m);font-size:12px;letter-spacing:.2em;color:var(--cyan);margin-bottom:10px">${esc(c.top)}</div>
+       <div class="sb-grid">${c.stage.replace(/class="duo"/g,'class="sb-duo"').replace(/class="nm"/g,'class="sb-name"').replace(/class="sv"/g,'class="sb-serve"').replace(/class="sc"/g,'class="sb-score" style="cursor:default"').replace(/class="gm"/g,'class="sb-games"').replace(/class="mid"/g,'class="sb-mid"')}</div>
+       <div style="text-align:center;font-family:var(--font-m);font-size:11px;color:var(--dim);letter-spacing:.15em;margin-top:14px">LIVE VIEW · READ-ONLY</div></div>
+      <div class="card" style="margin-top:14px"><h3>Recent results</h3>${recentMatches()}</div>`;}
+    else $('#main').innerHTML=`<div class="card"><div class="empty"><b>No live match right now</b>Live scores appear here the moment a match starts.</div></div>
+      <div class="card" style="margin-top:14px"><h3>Recent results</h3>${recentMatches()}</div>`;
+    return;
+  }
   if(!liveMatch){$('#main').innerHTML=`
     <div class="card"><h3>Start a match</h3>
      <div class="field"><label>Format</label><select id="mFmt" class="inp" onchange="$('#duoRow').style.display=this.value==='doubles'?'':'none'"><option value="singles">Singles (1 v 1)</option><option value="doubles">Doubles (2 v 2)</option></select></div>
@@ -717,7 +748,7 @@ function vScore(){
     <div class="card" style="margin-top:14px"><h3>Recent results</h3>${recentMatches()}</div>`;return}
   renderLive();
 }
-function startMatch(){
+function startMatch(){if(!can('match.score'))return deny();
   const doubles=$('#mFmt').value==='doubles';
   const a=$('#mA').value,b=$('#mB').value;
   const a2=doubles?$('#mA2').value:null,b2=doubles?$('#mB2').value:null;
@@ -850,8 +881,9 @@ function castWinner(m,w){
   applyCastPopup({top,stage});
 }
 function snapshot(){liveMatch.log.push(JSON.stringify({scoreA:liveMatch.scoreA,scoreB:liveMatch.scoreB,server:liveMatch.server,serverNum:liveMatch.serverNum,gamesA:liveMatch.gamesA,gamesB:liveMatch.gamesB}))}
-function undoPoint(){const m=liveMatch;if(!m.log.length)return;Object.assign(m,JSON.parse(m.log.pop()));save();renderLive()}
+function undoPoint(){if(!can('match.score'))return deny();const m=liveMatch;if(!m.log.length)return;Object.assign(m,JSON.parse(m.log.pop()));save();renderLive()}
 function point(side){
+  if(!can('match.score'))return deny();
   const m=liveMatch;snapshot();
   if(m.rally||m.server===side){m['score'+side]++;}
   else{sideOut(false);}
@@ -896,7 +928,7 @@ function finishMatch(w){
   sidePlayers(m,w).forEach(p=>notify(p,'Match result',`Congrats ${p.name}! Your side won ${Math.max(m.gamesA,m.gamesB)}–${Math.min(m.gamesA,m.gamesB)}. New club rating: ${p.rating}. — ${CFG.clubName}`));
   vScore();
 }
-function abandonMatch(){liveMatch.status='abandoned';save();liveMatch=null;vScore()}
+function abandonMatch(){if(!can('match.score'))return deny();liveMatch.status='abandoned';save();liveMatch=null;vScore()}
 function recentMatches(){
   const ms=DB.matches.filter(m=>m.status==='done').slice(-8).reverse();
   if(!ms.length)return '<div class="empty"><b>No matches yet</b>Start scoring above — ratings update automatically.</div>';
@@ -950,7 +982,7 @@ function tourCard(t){
     ${t.status!=='draft'?`<button class="btn btn-g btn-sm" onclick="schedModal('${t.id}')">🗓 Schedule</button>
     <button class="btn btn-ball btn-sm" onclick="castToTV('bracket','${t.id}')">📡 Smart TV</button>
     <button class="btn btn-g btn-sm" onclick="castBracket('${t.id}')">📺 Cast bracket</button>
-    <button class="btn btn-g btn-sm" onclick="exportFixtures('${t.id}')">⬇ Fixtures</button>`:''}
+    ${can('data.export')?`<button class="btn btn-g btn-sm" onclick="exportFixtures('${t.id}')">⬇ Fixtures</button>`:''}`:''}
     <button class="btn btn-g btn-sm" onclick="announceTour('${t.id}')">Announce</button></h3>
    ${t.status==='done'?podium(t):''}
    ${t.status==='draft'?draftPanel(t):renderBracket(t)}
@@ -1028,7 +1060,7 @@ function addTeam(){
 function addTeamRefresh(){$('#teamList').innerHTML=draftTeams.map((tm,i)=>`<span class="tag bl" style="margin:3px;display:inline-block">${esc(tm.name)} <a style="cursor:pointer" onclick="draftTeams.splice(${i},1);addTeamRefresh()">✕</a></span>`).join('')}
 function tourFmtUI(v){$('#customPanel').style.display=v==='custom'?'':'none';
   $('#thirdRow').style.display=(v==='single-elim'||v==='pool-knockout'||v==='custom')?'':'none'}
-function saveTour(){
+function saveTour(){if(!can('tournament.manage'))return deny();
   const dis=$('#tDis').value;
   let entrants,teams=[];
   if(dis==='doubles'){teams=draftTeams.slice();entrants=teams.map(x=>x.id);
@@ -1056,7 +1088,7 @@ function feesModal(id){const t=DB.tournaments.find(x=>x.id===id);
    <td>${t.regPaid[e]?'<span class="tag ok">paid</span>':`<button class="btn btn-g btn-sm" onclick="collectFee('${t.id}','${e}')">Collect ${peso(t.entryFee)}</button>`}</td></tr>`).join('')}</table>
   <div class="hint">Payments post to the main ledger as “Tournament entry”.</div>`);
 }
-function collectFee(tid,e){
+function collectFee(tid,e){if(!can('payment.collect'))return deny();
   const t=DB.tournaments.find(x=>x.id===tid);
   const pid=entPlayers(t,e)[0];
   const pay={id:uid('PAY'),date:today(),playerId:pid,amount:t.entryFee,method:'Cash',ref:t.id,for:'Tournament entry — '+t.name};
@@ -1066,7 +1098,7 @@ function collectFee(tid,e){
 
 /* ---------- bracket generation ---------- */
 function fxNew(){return{id:uid('TM'),a:null,b:null,winner:null,score:'',court:'',time:''}}
-function startTour(id){
+function startTour(id){if(!can('tournament.manage'))return deny();
   const t=DB.tournaments.find(x=>x.id===id);normTour(t);
   const seeded=ents(t).slice().sort((a,b)=>entRating(t,b)-entRating(t,a));
   if(t.format==='round-robin'){
@@ -1287,14 +1319,14 @@ function reportTM(tid,mid){
    <div class="field"><label>Score (e.g. 11-7, 9-11, 11-8)</label><input id="tmS" class="inp mono" placeholder="11-7, 11-9"></div>
    <button class="btn btn-p" onclick="saveTM('${tid}','${mid}')">Save result</button>`);
 }
-function saveTM(tid,mid){
+function saveTM(tid,mid){if(!can('tournament.manage'))return deny();
   const t=DB.tournaments.find(x=>x.id===tid),m=findFx(t,mid);
   m.winner=$('#tmW').value;m.score=$('#tmS').value||'W';
   routeResult(t,m);sweepByes(t);
   queue('tournaments',t);save();closeModal();
   renderBracketCast(t);vTour();
 }
-function startFixture(tid,mid){
+function startFixture(tid,mid){if(!can('match.score'))return deny();
   const t=DB.tournaments.find(x=>x.id===tid),m=findFx(t,mid);
   if(DB.matches.some(x=>x.status==='live')){toast('Finish the current live match first','warn');return}
   const A=entPlayers(t,m.a),B=entPlayers(t,m.b);
@@ -1327,7 +1359,7 @@ function schedModal(id){const t=DB.tournaments.find(x=>x.id===id);
    <div class="hint">Assigns courts (${esc(CFG.courts.join(', '))}) round-by-round in bracket order. Unplayed matches only. Each entrant gets rest between rounds by design of the ordering.</div>
    <button class="btn btn-p" onclick="autoSched('${id}')">Assign courts & times</button>`);
 }
-function autoSched(id){
+function autoSched(id){if(!can('tournament.manage'))return deny();
   const t=DB.tournaments.find(x=>x.id===id);
   const C=CFG.courts.length;let idx=0;
   let mins=(+$('#sH').value)*60;const per=+$('#sM').value||30;const date=$('#sD').value;
@@ -1417,7 +1449,7 @@ function renderBracketCast(t){
   if(send)pushTV({kind:'bracket',html});
   if(popup){const root=bCastWin.document.getElementById('root');if(root)root.innerHTML=html;}
 }
-function exportFixtures(id){
+function exportFixtures(id){if(!can('data.export'))return deny();
   const t=DB.tournaments.find(x=>x.id===id);
   const rows=[['round','entrant_a','entrant_b','court','time','score','winner']];
   t.rounds.forEach(r=>r.matches.forEach(m=>rows.push([r.name,entName(t,m.a)||'TBD',entName(t,m.b)||'TBD',m.court,m.time,m.score,entName(t,m.winner)||''])));
@@ -1437,8 +1469,8 @@ function vPlayers(){
   $('#main').innerHTML=`
   <div class="toolbar">
    <input class="inp" id="pQ" placeholder="Search players…" oninput="filterPlayers(this.value)">
-   <button class="btn btn-ball" onclick="playerForm()">＋ Add player</button>
-   <button class="btn btn-g" onclick="exportCSV('players')">⬇ Export CSV (Excel)</button>
+   ${can('player.manage')?'<button class="btn btn-ball" onclick="playerForm()">＋ Add player</button>':''}
+   ${can('data.export')?`<button class="btn btn-g" onclick="exportCSV('players')">⬇ Export CSV (Excel)</button>`:''}
   </div>
   <div class="card"><h3>Roster & leaderboard <span class="tag bl">ELO rated</span></h3>
    <div style="overflow-x:auto"><table id="pTable"><tr><th>#</th><th>Player</th><th>Tier</th><th>Rating</th><th>DUPR</th><th>W–L</th><th>No-shows</th><th>Channels</th><th></th></tr>
@@ -1483,7 +1515,7 @@ function playerForm(id){
    <div style="display:flex;gap:10px"><button class="btn btn-p" onclick="savePlayer('${id||''}')">Save player</button>
    ${id?`<button class="btn btn-danger" onclick="delPlayer('${id}')">Delete</button>`:''}</div>`);
 }
-function savePlayer(id){
+function savePlayer(id){if(!can('player.manage'))return deny();
   const data={name:$('#fN').value.trim(),phone:$('#fP').value,email:$('#fE').value,tier:$('#fT').value,dupr:$('#fD').value,photo:stagedPhoto,
     channels:Object.fromEntries(['email','sms','whatsapp','viber','messenger'].map(ch=>[ch,$('#ch_'+ch).checked]))};
   if(!data.name){toast('Name is required','bad');return}
@@ -1492,7 +1524,7 @@ function savePlayer(id){
   else{p={id:uid('P'),rating:1000,wins:0,losses:0,noShows:0,joined:today(),...data};DB.players.push(p)}
   queue('players',p);save();closeModal();toast('Player saved','ok');vPlayers();
 }
-function delPlayer(id){DB.players=DB.players.filter(p=>p.id!==id);save();closeModal();vPlayers()}
+function delPlayer(id){if(!can('player.manage'))return deny();DB.players=DB.players.filter(p=>p.id!==id);save();closeModal();vPlayers()}
 
 /* ---------------- PAYMENTS ---------------- */
 function vPay(){
@@ -1505,7 +1537,7 @@ function vPay(){
    <div class="card kpi"><div class="v">${peso(t30)}</div><div class="l">Last 30 days</div></div>
    <div class="card kpi"><div class="v">${DB.bookings.filter(b=>!b.paid&&b.status!=='cancelled'&&!b.parent).length}</div><div class="l">Unpaid bookings</div></div>
   </div>
-  <div class="toolbar" style="margin-top:14px"><button class="btn btn-g" onclick="exportCSV('payments')">⬇ Export CSV (Excel)</button></div>
+  ${can('data.export')?`<div class="toolbar" style="margin-top:14px"><button class="btn btn-g" onclick="exportCSV('payments')">⬇ Export CSV (Excel)</button></div>`:''}
   <div class="card"><h3>Ledger</h3><div style="overflow-x:auto"><table><tr><th>Date</th><th>Player</th><th>For</th><th>Method</th><th>Ref</th><th style="text-align:right">Amount</th></tr>
    ${ps.map(p=>`<tr><td class="mono">${p.date}</td><td>${esc(player(p.playerId)?.name||'—')}</td><td>${esc(p.for)}</td>
     <td><span class="tag cy">${esc(p.method)}</span></td><td class="mono">${esc(p.ref||'—')}</td>
@@ -1586,10 +1618,10 @@ function vAI(){
     <button class="btn btn-g" onclick="tomorrowReminders()">⏰ Queue tomorrow's booking reminders</button></div></div>`;
 }
 function remindPlayer(id){const p=player(id);notify(p,'Friendly reminder',`Hi ${p.name}! Quick reminder of your upcoming booking at ${CFG.clubName}. Please arrive 10 min early — reply if you need to reschedule.`);toast('Reminder queued','ok')}
-function winBack(){const idle=DB.players.filter(p=>!DB.bookings.some(b=>b.playerId===p.id&&b.date>=addDays(today(),-14)));
+function winBack(){if(!can('ai.action'))return deny();const idle=DB.players.filter(p=>!DB.bookings.some(b=>b.playerId===p.id&&b.date>=addDays(today(),-14)));
   idle.forEach(p=>notify(p,'We miss you on court!',`Hi ${p.name}! It's been a while — book any off-peak court this week at ${CFG.clubName} and get 25% off. See you soon! 🥒🏓`,true));
   toast(`Win-back queued to ${idle.length} players`,'ok')}
-function tomorrowReminders(){const t=addDays(today(),1);const bs=DB.bookings.filter(b=>b.date===t&&b.status==='confirmed'&&!b.parent);
+function tomorrowReminders(){if(!can('ai.action'))return deny();const t=addDays(today(),1);const bs=DB.bookings.filter(b=>b.date===t&&b.status==='confirmed'&&!b.parent);
   bs.forEach(b=>{const p=player(b.playerId);notify(p,'Booking tomorrow',`Reminder: ${b.court} tomorrow ${hh(b.hour)} at ${CFG.clubName}. Reply C to confirm or R to reschedule.`)});
   toast(`${bs.length} reminders queued for ${t}`,'ok')}
 
@@ -1651,7 +1683,7 @@ function vNotif(){
     <td><span class="tag ${n.status==='sent'?'ok':n.status==='failed'?'bad':'warn'}">${n.status}</span></td></tr>`).join('')}</table></div>`
    :'<div class="empty"><b>No notifications yet</b>Booking confirmations, reminders, and blasts will appear here.</div>'}</div>`;
 }
-function sendBlast(){
+function sendBlast(){if(!can('notify.send'))return deny();
   const aud=$('#nAud').value,sub=$('#nSub').value||'Club announcement',msg=$('#nMsg').value;
   if(!msg){toast('Write a message first','warn');return}
   const list=DB.players.filter(p=>aud==='all'||p.tier===aud);
@@ -1744,7 +1776,23 @@ function vSet(){
       <button class="btn btn-g btn-sm" onclick="userForm('${u.id}')">Edit</button>
       <button class="btn btn-g btn-sm" onclick="changePin('${u.id}')">PIN</button>
       <button class="btn btn-danger btn-sm" onclick="delUser('${u.id}')">✕</button></div></div>`).join('')}
-    <div class="hint">Five access levels: <b>admin</b> (everything), <b>management</b> (operations + BI/CYRA), <b>staff</b> (front desk), <b>member</b> (dashboard · booking · scoring), <b>public</b> (dashboard · live scores, view-only). PINs are SHA-256 hashed. At least one admin must always remain.</div>
+    <div class="hint">Least-privilege RBAC (NIST model): each role carries an exact permission set, enforced in the interface <i>and</i> inside every sensitive function. At least one admin must always remain. PINs are SHA-256 hashed.</div>
+    <div style="overflow-x:auto;margin-top:10px"><table>
+     <tr><th>Permission</th><th>Admin</th><th>Mgmt</th><th>Staff</th><th>Member</th><th>Public</th></tr>
+     ${[['Module visibility','13 modules','11 modules','10 modules','3 modules','2 modules'],
+        ['Create bookings','✓','✓','✓','✓','—'],
+        ['Check-in / no-show / cancel any','✓','✓','✓','own cancel','—'],
+        ['Collect payments & fees','✓','✓','✓','—','—'],
+        ['Manage players (PII)','✓','✓','✓','—','—'],
+        ['Score matches','✓','✓','✓','✓','view only'],
+        ['Manage tournaments & events','✓','✓','✓','—','—'],
+        ['Send notifications / blasts','✓','✓','✓','—','—'],
+        ['Kiosk & TV casting','✓','✓','✓','—','—'],
+        ['Business Intelligence','✓','✓','—','—','—'],
+        ['Data exports (CSV / fixtures)','✓','✓','—','—','—'],
+        ['System config · users · connectors · backup','✓','—','—','—','—']]
+       .map(r=>`<tr>${r.map((c,i)=>`<td${i?' class="mono" style="text-align:center;font-size:11.5px"':''}>${c==='✓'?'<span style="color:var(--ok)">✓</span>':c==='—'?'<span style="color:var(--dim)">—</span>':c}</td>`).join('')}</tr>`).join('')}
+    </table></div>
    </div>
   </div>
   <div class="hint" style="text-align:center;margin-top:18px">NEXPICKLE v${VERSION} · NEXARCH Systems Engineering · CYRABELL Platform · Iligan City<br>Precision. Scale. Control.</div>`;
@@ -1787,7 +1835,7 @@ async function changePin(id){
 }
 
 /* ---------------- EXPORT / IMPORT (Excel & backup) ---------------- */
-function exportCSV(key){
+function exportCSV(key){if(!can('data.export'))return deny();
   const rows=DB[key]||[];if(!rows.length){toast('Nothing to export','warn');return}
   const cols=[...new Set(rows.flatMap(r=>Object.keys(r)))].filter(c=>!['log','pin','photo'].includes(c));
   const csv=[cols.join(',')].concat(rows.map(r=>cols.map(c=>{let v=r[c];if(typeof v==='object')v=JSON.stringify(v);return '"'+String(v??'').replace(/"/g,'""')+'"'}).join(','))).join('\r\n');
@@ -1865,7 +1913,7 @@ function kioskSlideHTML(it){
   return '';
 }
 function kioskItems(){return DB.kiosk.items.filter(i=>i.on!==false)}
-function startKiosk(target){
+function startKiosk(target){if(!can('kiosk.manage'))return deny();
   const items=kioskItems();
   if(!items.length){toast('Add and enable at least one kiosk item first','warn');return}
   if(target==='popup'){openKioskWindow();kioskTargets.popup=true}
