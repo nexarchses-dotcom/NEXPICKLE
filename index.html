@@ -274,6 +274,7 @@ const LS_KEY='nexpickle_db_v1';
 /* ---------------- CONFIG (Settings-editable) ---------------- */
 const DEFAULT_CFG={
   clubName:'NEXPICKLE Club', clubLogo:'', clubAddress:'', clubPhone:'', currency:'₱', timezone:'Asia/Manila',
+  payGcash:'', payMaya:'', payCardNote:'',
   courts:['Court 1','Court 2','Court 3','Court 4'],
   openHour:6, closeHour:22, slotMinutes:60,
   rateOpenPlay:150, rateReserved:400, rateMemberDiscount:.2, rateCoach:600,
@@ -296,6 +297,7 @@ let DB=null, CFG=null, USER=null, syncTimer=null;
 function blankDB(){return{cfg:structuredClone(DEFAULT_CFG),users:[],players:[],bookings:[],events:[],matches:[],tournaments:[],payments:[],notifLog:[],outbox:[],kiosk:{items:[],defaultSecs:10},meta:{lastSync:null,seq:1}}}
 function load(){try{DB=JSON.parse(localStorage.getItem(LS_KEY))||blankDB()}catch(e){DB=blankDB()}
   DB.kiosk=DB.kiosk||{items:[],defaultSecs:10};DB.kiosk.items=DB.kiosk.items||[];
+  DB.users.forEach(u=>{if(u.role==='public')u.role='guest'});   // role rename migration
   CFG=Object.assign(structuredClone(DEFAULT_CFG),DB.cfg||{});
   CFG.notif=Object.assign(structuredClone(DEFAULT_CFG.notif),CFG.notif||{});
   DB.cfg=CFG;}
@@ -313,6 +315,7 @@ function cfgAutoQueue(){
   DB.outbox=DB.outbox.filter(o=>o.sheet!=='config');   // keep only latest config revision
   DB.outbox.push({sheet:'config',row:{id:'club-config',_rev:CFG._rev,cfg:cloudCfgObj()},ts:Date.now()});
   if(typeof updateSyncPill==='function'&&document.getElementById('syncDot'))updateSyncPill();
+  if(typeof schedulePushSoon==='function')schedulePushSoon();
 }
 function uid(p){return p+'-'+Date.now().toString(36)+'-'+(DB.meta.seq++).toString(36)}
 async function sha(t){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
@@ -460,10 +463,10 @@ const ICONS={
  tv:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="13" rx="2"/><path d="M17 2l-5 5-5-5"/></svg>',
  gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33h0a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51h0a1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82v0a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>'};
 const VIEWS=[
- {id:'dash',t:'Dashboard',i:'dash',sec:'Operations',roles:['admin','management','staff','member','public']},
- {id:'book',t:'Bookings',i:'book',roles:['admin','management','staff','member','public']},
+ {id:'dash',t:'Dashboard',i:'dash',sec:'Operations',roles:['admin','management','staff','member','guest']},
+ {id:'book',t:'Bookings',i:'book',roles:['admin','management','staff','member','guest']},
  {id:'plan',t:'Planner',i:'plan',roles:['admin','management','staff']},
- {id:'score',t:'Live Scoring',i:'score',roles:['admin','management','staff','member','public']},
+ {id:'score',t:'Live Scoring',i:'score',roles:['admin','management','staff','member','guest']},
  {id:'tour',t:'Tournaments',i:'trophy',roles:['admin','management','staff']},
  {id:'players',t:'Players',i:'users',sec:'Management',roles:['admin','management','staff']},
  {id:'pay',t:'Payments',i:'pay',roles:['admin','management','staff']},
@@ -478,14 +481,14 @@ const ROLES={
  management:'Management — business oversight: all operations, BI/analytics, exports, pricing & approvals; no system/security configuration',
  staff:'Staff / Front Desk — daily transactions: bookings, check-in, payments collection, scoring, tournaments, kiosk; no exports, no configuration',
  member:'Member — self-service: view schedule, create & cancel own bookings, self-score matches',
- public:'Public / Guest — read-only: dashboard, availability, live scores; no personal data, no transactions'};
+ guest:'Guest / Walk-in — dashboard, availability, walk-in booking requests, live scores; no personal data, no transactions'};
 /* RBAC permission matrix — least-privilege (NIST RBAC model: role → permissions → operations) */
 const PERMS={
  admin:['*'],
  management:['booking.create','booking.manage','booking.checkin','payment.collect','payment.view','player.manage','match.score','match.cast','tournament.manage','event.manage','notify.send','kiosk.manage','bi.view','ai.action','data.export'],
  staff:['booking.create','booking.manage','booking.checkin','payment.collect','payment.view','player.manage','match.score','match.cast','tournament.manage','event.manage','notify.send','kiosk.manage','ai.action'],
- member:['booking.create','booking.cancel.own','match.score'],
- public:['booking.request']};
+ member:['booking.create','booking.cancel.own','booking.pay.own','match.score'],
+ guest:['booking.request','booking.cancel.own','booking.pay.own']};
 function can(p){if(!USER)return false;const s=PERMS[USER.role]||[];return s.includes('*')||s.includes(p)}
 function deny(){toast('Not permitted for role “'+(USER?USER.role:'—')+'” (least-privilege policy)','warn');return false}
 let CUR='dash';
@@ -683,6 +686,7 @@ function saveBooking(){
   toast('Booking saved','ok');vBook();
 }
 function bookingCard(id){
+  if(!can('booking.manage'))return myBookingCard(id);
   const b=DB.bookings.find(x=>x.id===id),p=player(b.playerId);
   openModal(`<h2>Booking · ${esc(b.court)} · ${hh(b.hour)}</h2>
    <table><tr><td>Date</td><td class="mono">${b.date}</td></tr><tr><td>Player</td><td>${esc(p?.name||'—')}</td></tr>
@@ -705,6 +709,86 @@ function bookingCard(id){
     <button class="btn btn-g btn-sm" onclick="markNoShow('${b.id}')">No-show</button>`:''}
     ${can('booking.manage')||can('booking.cancel.own')?`<button class="btn btn-danger btn-sm" onclick="cancelBooking('${b.id}')">Cancel booking</button>`:''}
    </div>`);
+}
+/* ---- SELF-SERVICE BOOKING CARD (Guests & Members) ----
+   Pay a confirmed booking (GCash / Maya / Debit card / Cash on-site) and
+   cancel OWN bookings up to 1 day before the booked date, verified by name. */
+function myBookingCard(id){
+  const b=DB.bookings.find(x=>x.id===id);if(!b)return;
+  const p=player(b.playerId);
+  const canCancelDate=b.date>today();               // at least 1 day before
+  const amt=bookAmount(b);
+  const payable=b.status==='confirmed'&&!b.paid&&can('booking.pay.own');
+  openModal(`<h2>My booking · ${esc(b.court)} · ${hh(b.hour)}</h2>
+   <table><tr><td>Date</td><td class="mono">${b.date}</td></tr>
+   <tr><td>Booked for</td><td>${esc(p?.name||'—')}</td></tr>
+   <tr><td>Status</td><td><span class="tag ${b.status==='confirmed'?'ok':'warn'}">${b.status}</span></td></tr>
+   <tr><td>Payment</td><td>${b.paid?'<span class="tag ok">paid</span>':`<span class="tag warn">unpaid · ${peso(amt)}</span>`}</td></tr></table>
+   ${b.status==='pending'?`<div style="background:rgba(255,193,7,.1);border:1px solid rgba(255,193,7,.4);border-radius:10px;padding:10px 12px;margin-top:12px;font-size:13px;color:#FFC107">⏳ Awaiting staff confirmation — payment opens once confirmed.</div>`:''}
+   ${payable?`
+   <div class="nav-sec" style="padding-left:0;margin-top:14px">PAY THIS BOOKING · ${peso(amt)}</div>
+   <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <button class="btn btn-g btn-sm" onclick="selfPayPanel('${b.id}','GCash')">💙 GCash</button>
+    <button class="btn btn-g btn-sm" onclick="selfPayPanel('${b.id}','Maya')">💚 Maya</button>
+    <button class="btn btn-g btn-sm" onclick="selfPayPanel('${b.id}','Card')">💳 Debit card</button>
+    <button class="btn btn-g btn-sm" onclick="selfPayPanel('${b.id}','Cash')">💵 Cash on-site</button>
+   </div><div id="spPanel"></div>`:''}
+   <div class="nav-sec" style="padding-left:0;margin-top:16px">CANCEL BOOKING</div>
+   ${canCancelDate?`
+   <div style="font-size:12.5px;color:var(--dim);margin-bottom:8px">Only the person who booked may cancel. Type the full name exactly as booked to confirm.</div>
+   <div class="field"><input id="scName" class="inp" placeholder="Full name on the booking" autocomplete="off"></div>
+   <button class="btn btn-danger btn-sm" onclick="selfCancel('${b.id}')">Cancel my booking</button>`
+   :`<div style="background:var(--navy-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px;color:var(--mut);line-height:1.6">🔒 Cancellations must be made at least <b style="color:var(--ink)">1 day before</b> the booked date. For same-day changes please see the front desk — staff can assist anytime.</div>`}
+   <button class="btn btn-g" style="margin-top:14px" onclick="closeModal()">Close</button>`);
+}
+function selfPayPanel(id,method){
+  const b=DB.bookings.find(x=>x.id===id);if(!b)return;
+  const amt=bookAmount(b);
+  const wallet=method==='GCash'?CFG.payGcash:method==='Maya'?CFG.payMaya:'';
+  let inner='';
+  if(method==='Cash')
+    inner=`<div style="font-size:13px;color:var(--mut);line-height:1.7">💵 Please pay <b style="color:var(--ball)">${peso(amt)}</b> in cash at the front desk before your session. Staff will record it on check-in.</div>`;
+  else if(method==='Card')
+    inner=`<div style="font-size:13px;color:var(--mut);line-height:1.7;margin-bottom:10px">💳 ${esc(CFG.payCardNote||'Pay with your debit/credit card at the front-desk terminal.')} Amount: <b style="color:var(--ball)">${peso(amt)}</b>.<br>Already charged? Enter the approval/reference code:</div>
+     <div class="field"><input id="spRef" class="inp mono" placeholder="Approval code"></div>
+     <button class="btn btn-p btn-sm" onclick="selfPay('${id}','Card')">Record card payment</button>`;
+  else
+    inner=`<div style="font-size:13px;color:var(--mut);line-height:1.7;margin-bottom:10px">Send <b style="color:var(--ball)">${peso(amt)}</b> to:<br>
+     <span class="mono" style="font-size:16px;color:var(--cyan)">${esc(wallet||'— ask the front desk for the '+method+' number —')}</span><br>
+     <span style="font-size:12px">${esc(CFG.clubName)}</span><br>Then enter the ${method} reference number:</div>
+     <div class="field"><input id="spRef" class="inp mono" placeholder="${method} Ref. No." inputmode="numeric"></div>
+     <button class="btn btn-p btn-sm" onclick="selfPay('${id}','${method}')">Confirm ${method} payment</button>`;
+  $('#spPanel').innerHTML=`<div style="background:var(--navy-2);border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:10px">${inner}</div>`;
+  setTimeout(()=>$('#spRef')?.focus(),100);
+}
+function selfPay(id,method){
+  if(!can('booking.pay.own'))return deny();
+  const b=DB.bookings.find(x=>x.id===id);if(!b)return;
+  if(b.status!=='confirmed'||b.paid){toast('This booking cannot be paid right now','warn');return}
+  const ref=($('#spRef')?.value||'').trim();
+  if((method==='GCash'||method==='Maya')&&ref.length<4){toast('Please enter the '+method+' reference number','bad');return}
+  const amt=bookAmount(b);
+  b.paid=true;b.payMethod=method;queue('bookings',b);
+  const pay={id:uid('PAY'),date:today(),playerId:b.playerId,amount:amt,method,ref,
+    for:'Court booking (self-paid)',bookingId:b.id,selfPaid:true};
+  DB.payments.push(pay);queue('payments',pay);save();closeModal();
+  const p=player(b.playerId);
+  if(p)notify(p,'Payment received',`${CFG.clubName}: received ${peso(amt)} via ${method}${ref?' (ref '+ref+')':''} for your ${b.date} ${hh(b.hour)} booking. Salamat!`);
+  toast('Payment recorded — '+peso(amt)+' via '+method+' ✓','ok');
+  if(CUR==='book')vBook();
+}
+function selfCancel(id){
+  if(!can('booking.cancel.own'))return deny();
+  const b=DB.bookings.find(x=>x.id===id);if(!b)return;
+  if(b.date<=today()){toast('Cancellations close 1 day before the booked date — please see the front desk','warn');return}
+  const p=player(b.playerId);
+  const typed=($('#scName')?.value||'').trim().replace(/\s+/g,' ').toLowerCase();
+  if(!p||typed!==p.name.trim().replace(/\s+/g,' ').toLowerCase()){
+    toast('Name does not match this booking — only the person who booked may cancel','bad');return}
+  b.status='cancelled';queue('bookings',b);save();closeModal();
+  notify(p,'Booking cancelled',`${CFG.clubName}: your ${b.date} ${hh(b.hour)} booking on ${b.court} was cancelled as requested. Book again anytime!`);
+  toast('Booking cancelled — confirmation sent','ok');
+  if(CUR==='book')vBook();
 }
 /* ---- WALK-IN PUBLIC BOOKING REQUESTS (pending → staff confirmation) ---- */
 function pendingBookings(){return DB.bookings.filter(b=>b.status==='pending')}
@@ -819,9 +903,16 @@ function conflictsModal(){
     <button class="btn btn-g" onclick="closeModal()">Close</button></div>`);
 }
 function markNoShow(id){if(!can('booking.checkin'))return deny();const b=DB.bookings.find(x=>x.id===id);b.status='no-show';const p=player(b.playerId);if(p)p.noShows=(p.noShows||0)+1;queue('bookings',b);save();closeModal();toast('Marked as no-show','warn');vBook()}
-function cancelBooking(id){if(!(can('booking.manage')||can('booking.cancel.own')))return deny();const b=DB.bookings.find(x=>x.id===id);b.status='cancelled';queue('bookings',b);save();closeModal();
+function cancelBooking(id){if(!can('booking.manage'))return deny();const b=DB.bookings.find(x=>x.id===id);b.status='cancelled';queue('bookings',b);save();closeModal();
   const p=player(b.playerId);notify(p,'Booking cancelled',`Hi ${p?.name}, your booking on ${b.date} ${hh(b.hour)} (${b.court}) has been cancelled. Reply to rebook. — ${CFG.clubName}`);
   toast('Booking cancelled');vBook()}
+function bookAmount(b){
+  const p=player(b.playerId);
+  let amt=b.type==='coaching'?CFG.rateCoach:b.type==='open'?CFG.rateOpenPlay:CFG.rateReserved;
+  amt*=b.durationH||1;
+  if(p?.tier==='Member')amt=Math.round(amt*(1-CFG.rateMemberDiscount));
+  return amt;
+}
 function payBooking(id){
   if(!can('payment.collect'))return deny();
   const b=DB.bookings.find(x=>x.id===id),p=player(b.playerId);
@@ -1768,7 +1859,7 @@ function vPay(){
   ${can('data.export')?`<div class="toolbar" style="margin-top:14px"><button class="btn btn-g" onclick="exportCSV('payments')">⬇ Export CSV (Excel)</button></div>`:''}
   <div class="card"><h3>Ledger</h3><div style="overflow-x:auto"><table><tr><th>Date</th><th>Player</th><th>For</th><th>Method</th><th>Ref</th><th style="text-align:right">Amount</th></tr>
    ${ps.map(p=>`<tr><td class="mono">${p.date}</td><td>${esc(player(p.playerId)?.name||'—')}</td><td>${esc(p.for)}</td>
-    <td><span class="tag cy">${esc(p.method)}</span></td><td class="mono">${esc(p.ref||'—')}</td>
+    <td><span class="tag cy">${esc(p.method)}</span>${p.selfPaid?' <span class="tag warn" title="Self-paid at the kiosk — verify reference">self</span>':''}</td><td class="mono">${esc(p.ref||'—')}</td>
     <td class="mono" style="text-align:right;color:var(--ok)">${peso(p.amount)}</td></tr>`).join('')}</table></div></div>`;
 }
 
@@ -1971,6 +2062,11 @@ function vSet(){
     <div class="field"><label>Club name</label><input class="inp" value="${esc(CFG.clubName)}" onchange="CFG.clubName=this.value;save();applyBranding()"></div>
     <div class="field"><label>Address</label><input class="inp" value="${esc(CFG.clubAddress)}" placeholder="Buru-un, Iligan City, Lanao del Norte" onchange="CFG.clubAddress=this.value;save();applyBranding()"></div>
     <div class="field"><label>Telephone / mobile</label><input class="inp mono" value="${esc(CFG.clubPhone)}" placeholder="+63 905 251 5051" onchange="CFG.clubPhone=this.value;save();applyBranding()"></div>
+    <div class="grid g3">
+     <div class="field"><label>GCash number (self-pay)</label><input class="inp mono" value="${esc(CFG.payGcash)}" placeholder="0905 251 5051" onchange="CFG.payGcash=this.value;save()"></div>
+     <div class="field"><label>Maya number (self-pay)</label><input class="inp mono" value="${esc(CFG.payMaya)}" placeholder="0905 251 5051" onchange="CFG.payMaya=this.value;save()"></div>
+     <div class="field"><label>Debit-card note</label><input class="inp" value="${esc(CFG.payCardNote)}" placeholder="Card terminal at the front desk" onchange="CFG.payCardNote=this.value;save()"></div>
+    </div>
     <div class="grid g2">
      <div class="field"><label>Open hour</label><input class="inp" type="number" min="0" max="23" value="${CFG.openHour}" onchange="CFG.openHour=+this.value;save()"></div>
      <div class="field"><label>Close hour</label><input class="inp" type="number" min="1" max="24" value="${CFG.closeHour}" onchange="CFG.closeHour=+this.value;save()"></div>
@@ -1985,7 +2081,9 @@ function vSet(){
    <div class="card"><h3>Cloud sync — Google Sheets backend</h3>
     <div class="field"><label>Apps Script Web App URL</label><input class="inp mono" style="font-size:12px" value="${esc(CFG.gasUrl)}" onchange="CFG.gasUrl=this.value.trim();save()" placeholder="https://script.google.com/macros/s/…/exec"></div>
     <div class="field"><label>API token (must match Code.gs)</label><input class="inp mono" value="${esc(CFG.gasToken)}" onchange="CFG.gasToken=this.value.trim();save()"></div>
-    <div class="field"><label>Auto-sync every (minutes, 0 = manual)</label><input class="inp mono" type="number" value="${CFG.autoSyncMin}" onchange="CFG.autoSyncMin=+this.value;save();scheduleAutoSync()"></div>
+    <div class="field"><label>Auto-sync</label><select class="inp" onchange="CFG.autoSyncMin=+this.value;save();scheduleAutoSync();toast(this.value==='0'?'Auto-sync off — manual only':'Auto-sync every '+this.value+' min','ok')">
+     ${[[0,'Off — manual sync only'],[1,'Every 1 minute'],[2,'Every 2 minutes'],[5,'Every 5 minutes'],[10,'Every 10 minutes'],[30,'Every 30 minutes']].map(([v,l])=>`<option value="${v}" ${+CFG.autoSyncMin===v?'selected':''}>${l}</option>`).join('')}</select>
+    <div style="font-size:11.5px;color:var(--dim);margin-top:5px">Background sync runs silently on the interval, ~8 s after any change, when the connection returns, and when the app comes back to the foreground. The header pill shows · AUTO when active.</div></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
      <button class="btn btn-p" onclick="syncNow()">⇅ Sync now</button>
      <button class="btn btn-g" onclick="exportAll()">⬇ Full backup (JSON)</button>
@@ -2025,10 +2123,13 @@ function vSet(){
       <button class="btn btn-danger btn-sm" onclick="delUser('${u.id}')">✕</button></div></div>`).join('')}
     <div class="hint">Least-privilege RBAC (NIST model): each role carries an exact permission set, enforced in the interface <i>and</i> inside every sensitive function. At least one admin must always remain. PINs are SHA-256 hashed.</div>
     <div style="overflow-x:auto;margin-top:10px"><table>
-     <tr><th>Permission</th><th>Admin</th><th>Mgmt</th><th>Staff</th><th>Member</th><th>Public</th></tr>
+     <tr><th>Permission</th><th>Admin</th><th>Mgmt</th><th>Staff</th><th>Member</th><th>Guest</th></tr>
      ${[['Module visibility','13 modules','11 modules','10 modules','3 modules','2 modules'],
         ['Create bookings','✓','✓','✓','✓','—'],
-        ['Check-in / no-show / cancel any','✓','✓','✓','own cancel','—'],
+        ['Cancel any booking, anytime','✓','✓','✓','—','—'],
+        ['Cancel OWN booking (≥1 day before, name-verified)','✓','✓','✓','✓','✓'],
+        ['Self-pay confirmed booking (GCash/Maya/Card/Cash)','—','—','—','✓','✓'],
+        ['Check-in / no-show','✓','✓','✓','—','—'],
         ['Collect payments & fees','✓','✓','✓','—','—'],
         ['Manage players (PII)','✓','✓','✓','—','—'],
         ['Score matches','✓','✓','✓','✓','view only'],
@@ -2296,15 +2397,23 @@ function queue(sheet,row){
   const i=DB.outbox.findIndex(o=>o.sheet===sheet&&o.row.id===copy.id);
   if(i>=0){const prevBase=DB.outbox[i].row._base;
     DB.outbox[i].row=Object.assign(DB.outbox[i].row,copy,{_base:prevBase});
-    DB.outbox[i].ts=Date.now();save();updateSyncPill();return;}
+    DB.outbox[i].ts=Date.now();save();updateSyncPill();schedulePushSoon();return;}
   DB.outbox.push({sheet,row:copy,ts:Date.now()});
   if(['bookings','payments','matches','tournaments'].includes(sheet))fireConnectors(sheet.replace(/s$/,''),row);
-  updateSyncPill();}
+  updateSyncPill();schedulePushSoon();}
 async function gasPost(payload){
   const r=await fetch(CFG.gasUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload)});
   return r.json();}
-async function syncNow(){
-  if(!CFG.gasUrl){toast('Set your Apps Script URL in Settings first','warn');return}
+let _syncBusy=false,_pushSoon=null;
+function schedulePushSoon(){ // push-on-change: quiet sync ~8s after the last edit
+  if(!CFG.gasUrl||!(CFG.autoSyncMin>0))return;
+  clearTimeout(_pushSoon);
+  _pushSoon=setTimeout(()=>{if(navigator.onLine&&DB.outbox.length)syncNow(true)},8000);
+}
+async function syncNow(silent){
+  if(_syncBusy)return;
+  if(!CFG.gasUrl){if(!silent)toast('Set your Apps Script URL in Settings first','warn');return}
+  _syncBusy=true;
   $('#syncTxt').textContent='SYNCING…';
   try{
     const res=await gasPost({action:'sync',token:CFG.gasToken,outbox:DB.outbox,device:USER?.name||'device'});
@@ -2333,10 +2442,11 @@ async function syncNow(){
         toast(res.conflicts.length+' stale change(s) rejected — those records were updated elsewhere first. Showing the latest from Google Sheets.','warn');
       }
       const clashes=resolveBookingClashes();
-      save();toast('Synced with Google Sheets','ok');
+      save();if(!silent)toast('Synced with Google Sheets','ok');
       if(clashes.length&&CUR==='book')vBook();}
     else throw new Error(res.error||'Sync rejected');
-  }catch(e){toast('Sync failed: '+e.message,'bad')}
+  }catch(e){if(!silent)toast('Sync failed: '+e.message,'bad')}
+  _syncBusy=false;
   updateSyncPill();if(CUR)go(CUR);
 }
 function normPulled(key,r){
@@ -2346,6 +2456,7 @@ function normPulled(key,r){
     r.paid=(r.paid===true||r.paid==='true'||r.paid==='TRUE');}
   if(key==='players'){r.rating=+r.rating||1000;r.wins=+r.wins||0;r.losses=+r.losses||0;r.noShows=+r.noShows||0;}
   if(key==='payments')r.amount=+r.amount||0;
+  if(key==='users'&&r.role==='public')r.role='guest';
   return r;
 }
 /* ---- DOMAIN CONFLICT MANAGEMENT: double-bookings across devices ----
@@ -2378,9 +2489,17 @@ function mergePull(key,rows){
 function updateSyncPill(){
   const on=!!CFG.gasUrl;
   $('#syncDot').className='dot '+(on?(DB.outbox.length?'':'ok'):'');
-  $('#syncTxt').textContent=on?(DB.outbox.length?DB.outbox.length+' PENDING':'SYNCED'):'LOCAL';
+  const auto=on&&CFG.autoSyncMin>0?' · AUTO':'';
+  $('#syncTxt').textContent=on?(DB.outbox.length?DB.outbox.length+' PENDING'+auto:'SYNCED'+auto):'LOCAL';
 }
-function scheduleAutoSync(){clearInterval(syncTimer);if(CFG.autoSyncMin>0&&CFG.gasUrl)syncTimer=setInterval(syncNow,CFG.autoSyncMin*60000)}
+function scheduleAutoSync(){clearInterval(syncTimer);
+  if(CFG.autoSyncMin>0&&CFG.gasUrl)syncTimer=setInterval(()=>syncNow(true),CFG.autoSyncMin*60000);
+  updateSyncPill();}
+window.addEventListener('online',()=>{if(CFG.gasUrl&&CFG.autoSyncMin>0)syncNow(true)});
+document.addEventListener('visibilitychange',()=>{ // catch up when the tab returns
+  if(document.visibilityState==='visible'&&CFG.gasUrl&&CFG.autoSyncMin>0){
+    const age=DB.meta.lastSync?Date.now()-new Date(DB.meta.lastSync).getTime():Infinity;
+    if(DB.outbox.length||age>CFG.autoSyncMin*60000)syncNow(true);}});
 
 /* ---------------- KIOSK / DIGITAL SIGNAGE ----------------
    Rotating playlist: YouTube ads, pictures, announcements, live scores.
